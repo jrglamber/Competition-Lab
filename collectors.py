@@ -293,83 +293,149 @@ def dreamcar():
         log.info("[Dreamcar] reject sample: %s",reason)
     return out
 
+def _cash_prize_from_title(title):
+    """Strict immediate cash end-prize parser for cash-only lanes."""
+    t=title or ''
+    pats=[
+      r'(?:win\\s*)?£\\s*([\\d,]+(?:\\.\\d+)?)\\s*(?:tax[- ]?free\\s*)?cash\\b',
+      r'£\\s*([\\d,]+(?:\\.\\d+)?)\\s*(?:enter|[-–—])',
+      r'£\\s*([\\d,]+(?:\\.\\d+)?)\\s*$',
+    ]
+    for p in pats:
+        m=re.search(p,t,re.I)
+        if m:return float(m.group(1).replace(',',''))
+    return None
+
 def bounty():
-    """Bounty: use live entry-list pages because they expose exact price, max and sold count."""
-    bases=['https://bountycompetitions.co.uk/','https://bountycompetitions.co.uk/competitions']
-    out=[]; seen=set(); urls=[]
+    """Bounty cash-only collector.
+
+    The old adapter crawled /lists/ links, but Bounty's current site exposes live
+    competitions directly under /category/cash and /competition/<slug>.
+    """
+    base='https://bountycompetitions.co.uk/category/cash'
+    out=[]; seen=set()
     try:
-        for base in bases:
+        soup=BeautifulSoup(get(base),'html.parser')
+        links=[]
+        for a in soup.select('a[href*="/competition/"]'):
+            u=urljoin(base,a.get('href','')).split('?')[0]
+            if u not in seen:
+                seen.add(u); links.append(u)
+        log.info("[Bounty] cash category competition links=%d",len(links))
+        for url in links[:120]:
             try:
-                soup=BeautifulSoup(get(base),'html.parser')
-                for a in soup.select('a[href*="/lists/"]'):
-                    u=urljoin(base,a.get('href','')).split('?')[0]
-                    if u not in seen: seen.add(u); urls.append(u)
-            except Exception: pass
-        for url in urls[:100]:
-            try:
-                ps=BeautifulSoup(get(url),'html.parser'); title=_title(ps,url).replace(' Ticket List',''); text=' '.join(ps.stripped_strings)
-                if re.search(r'Ends\s+Ended\b',text,re.I) or 'sold out' in text.lower(): continue
-                pm=re.search(r'Price\s*£?\s*([\d,.]+)\s*(p|pence|£)?',text,re.I)
+                ps=BeautifulSoup(get(url),'html.parser')
+                title=_title(ps,url); text=' '.join(ps.stripped_strings)
+                tl=title.lower()
+                if any(x in tl for x in ('instant win','tickets into','odds booster','ticket into')):
+                    continue
+                prize=_cash_prize_from_title(title)
+                if prize is None: continue
+
+                pm=(re.search(r'£\\s*([\\d,.]+)\\s*(?:A TICKET|PER TICKET|Per Entry)',text,re.I)
+                    or re.search(r'([\\d,.]+)p\\s*(?:A TICKET|PER TICKET|Per Entry)',text,re.I))
+                price=None
                 if pm:
                     price=float(pm.group(1).replace(',',''))
-                    # Bounty commonly renders 20p/45p/99p rather than £0.xx.
-                    around=pm.group(0).lower()
-                    if 'p' in around and '£' not in around: price/=100.0
-                else: price=None
-                mm=re.search(r'Max Tickets\s*([\d,]+)',text,re.I)
-                sr=re.search(r'([\d,]+)\s*/\s*([\d,]+)\s*Tickets Sold',text,re.I)
-                sold=int(sr.group(1).replace(',','')) if sr else None
-                max_t=int(mm.group(1).replace(',','')) if mm else (int(sr.group(2).replace(',','')) if sr else None)
+                    if 'p' in pm.group(0).lower() and '£' not in pm.group(0): price/=100.0
+
+                maxm=(re.search(r'([\\d,]+)\\s*TOTAL TICKETS',text,re.I)
+                      or re.search(r'Max Tickets\\s*([\\d,]+)',text,re.I))
+                max_t=int(maxm.group(1).replace(',','')) if maxm else None
+
+                # Current product pages expose the confirmed entry list and Total Tickets.
+                soldm=(re.search(r'Total Tickets:\\s*([\\d,]+)',text,re.I)
+                       or re.search(r'Tickets Sold\\s*([\\d,]+)',text,re.I))
+                sold=int(soldm.group(1).replace(',','')) if soldm else None
+
                 closes=_uk_close_from_words(text)
-                cashalt=re.search(r'Cash Alternative\s*£\s*([\d,]+(?:\.\d+)?)',text,re.I)
-                prize=float(cashalt.group(1).replace(',','')) if cashalt else _cash_value(title,text)
-                scope=_scope(title,text)
-                # Bounty's published process says the winner is picked when timer runs out or earlier on sellout.
-                guaranteed=('ends' in text.lower() and closes is not None)
-                out.append(dict(operator='bounty',external_id=url.rstrip('/').split('/')[-1],title=title[:300],url=url,
-                    prize=prize,price=price,sold=sold,max_tickets=max_t,closes=closes,guaranteed=guaranteed,scope=scope))
+                if closes is None:
+                    # Category card often has the close even when product body changes.
+                    # Find the matching link's surrounding card.
+                    for a in soup.select('a[href]'):
+                        if urljoin(base,a.get('href','')).split('?')[0]==url:
+                            node=a
+                            for _ in range(7):
+                                if node is None: break
+                                closes=_uk_close_from_words(' '.join(node.stripped_strings))
+                                if closes: break
+                                node=node.parent
+                            if closes: break
+
+                if None in (price,sold,max_t,closes):
+                    log.info("[Bounty] reject %s price=%s sold=%s max=%s close=%s",title[:60],price,sold,max_t,bool(closes))
+                    continue
+                out.append(dict(operator='bounty',external_id=url.rstrip('/').split('/')[-1],
+                    title=title[:300],url=url,prize=prize,price=price,sold=sold,max_tickets=max_t,
+                    closes=closes,guaranteed=True,scope='eligible'))
             except Exception as e:
-                out.append(dict(operator='bounty',external_id=url.rstrip('/').split('/')[-1],title=url,url=url,error=str(e),scope='research'))
+                log.info("[Bounty] parse error %s :: %s",url,e)
     except Exception as e:
-        out.append(dict(operator='bounty',external_id='discovery',title='Bounty discovery adapter',url=bases[0],error=str(e),scope='research'))
+        log.exception("[Bounty] discovery failure: %s",e)
     return out
 
 def rev():
-    """Rev Comps: product pages expose sold, remaining, ticket price and guaranteed auto draw."""
-    bases=['https://www.revcomps.com/','https://www.revcomps.com/current-entry-lists']
-    out=[]; seen=set(); urls=[]
+    """Rev cash-only collector using live prize links rather than entry-list discovery."""
+    base='https://www.revcomps.com/'
+    out=[]; seen=set()
     try:
-        for base in bases:
+        soup=BeautifulSoup(get(base),'html.parser')
+        links=[]
+        for a in soup.select('a[href]'):
+            label=' '.join(a.stripped_strings)
+            u=urljoin(base,a.get('href','')).split('?')[0]
+            if 'revcomps.com' not in u or u.rstrip('/')==base.rstrip('/') or u in seen: continue
+            # Rev prize pages are top-level slugs. Restrict discovery to anchors that
+            # visibly advertise cash, avoiding account/help/navigation URLs.
+            if 'cash' not in label.lower() and '£' not in label: continue
+            seen.add(u); links.append(u)
+        log.info("[Rev] candidate cash links=%d",len(links))
+
+        for url in links[:150]:
             try:
-                soup=BeautifulSoup(get(base),'html.parser')
-                for a in soup.select('a[href]'):
-                    u=urljoin(base,a.get('href','')).split('?')[0]
-                    # Rev current prizes are often top-level slugs as well as /product/ URLs.
-                    if 'revcomps.com' not in u: continue
-                    label=' '.join(a.stripped_strings).lower()
-                    if ('product/' in u or 'cash' in label or 'ticket' in label or 'win ' in label) and u not in seen:
-                        seen.add(u); urls.append(u)
-            except Exception: pass
-        for url in urls[:120]:
-            try:
-                ps=BeautifulSoup(get(url),'html.parser'); title=_title(ps,url); text=' '.join(ps.stripped_strings); low=text.lower()
-                if 'closed' in low or 'draw conducted' in low or 'sold out' in low: continue
-                pm=re.search(r'£\s*([\d,.]+)\s*per ticket',text,re.I)
-                sr=re.search(r'Sold\s*:?\s*([\d,]+)\s*Remaining\s*:?\s*([\d,]+)',text,re.I)
-                maxm=re.search(r'Prize has a max of\s*([\d,]+)\s*tickets',text,re.I)
+                ps=BeautifulSoup(get(url),'html.parser')
+                title=_title(ps,url); text=' '.join(ps.stripped_strings); low=text.lower()
+                if any(x in title.lower() for x in ('instant win','credit','ticket into','tickets into')):
+                    continue
+                if re.search(r'\\bClosed\\b',text,re.I) or 'draw conducted' in low: continue
+                prize=_cash_prize_from_title(title)
+                if prize is None: continue
+
+                pm=(re.search(r'£\\s*([\\d,.]+)\\s*(?:PER TICKET|A TICKET)',text,re.I)
+                    or re.search(r'£\\s*([\\d,.]+)\\s*(?:ENTRY|COMPETITION)',text,re.I))
+                if not pm: continue
+                price=float(pm.group(1).replace(',',''))
+                if price <= 0: continue
+
+                sr=(re.search(r'Remaining\\s*:?\\s*([\\d,]+).*?Sold\\s*:?\\s*([\\d,]+)',text,re.I)
+                    or re.search(r'Sold\\s*:?\\s*([\\d,]+).*?Remaining\\s*:?\\s*([\\d,]+)',text,re.I))
                 if not sr: continue
-                sold=int(sr.group(1).replace(',','')); remaining=int(sr.group(2).replace(',',''))
+                if sr.re.pattern.lower().startswith('remaining'):
+                    remaining=int(sr.group(1).replace(',','')); sold=int(sr.group(2).replace(',',''))
+                else:
+                    sold=int(sr.group(1).replace(',','')); remaining=int(sr.group(2).replace(',',''))
+                maxm=re.search(r'(?:max(?:imum)?(?: of)?|max of)\\s*([\\d,]+)\\s*tickets',text,re.I)
                 max_t=int(maxm.group(1).replace(',','')) if maxm else sold+remaining
-                closes=_uk_close_from_words(text)
-                guaranteed=('guaranteed auto draw' in low or 'guaranteed draw' in low)
-                prize=_cash_value(title,text)
-                out.append(dict(operator='rev',external_id=url.rstrip('/').split('/')[-1],title=title[:300],url=url,
-                    prize=prize,price=float(pm.group(1).replace(',','')) if pm else None,sold=sold,max_tickets=max_t,
-                    closes=closes,guaranteed=guaranteed,scope=_scope(title,text)))
+
+                cm=(re.search(r'(?:Guaranteed Auto Draw|Auto Draw|Draw)\\s*(?:at|on)?\\s*([^|]+?\\d{4})',text,re.I)
+                    or re.search(r'(?:at\\s*)?(\\d{1,2}:\\d{2}(?::\\d{2})?\\s*(?:am|pm)?\\s*,?\\s*\\d{1,2}(?:ST|ND|RD|TH)?\\s+[A-Za-z]{3,9}\\s+\\d{4})',text,re.I))
+                closes=None
+                if cm:
+                    try:
+                        closes=dtparse.parse(cm.group(1),dayfirst=True,fuzzy=True)
+                        if closes.tzinfo is None: closes=closes.replace(tzinfo=UK)
+                    except Exception: closes=None
+                if closes is None: closes=_uk_close_from_words(text)
+
+                if closes is None:
+                    log.info("[Rev] reject close %s",title[:70]); continue
+                out.append(dict(operator='rev',external_id=url.rstrip('/').split('/')[-1],
+                    title=title[:300],url=url,prize=prize,price=price,sold=sold,max_tickets=max_t,
+                    closes=closes,guaranteed=True,scope='eligible'))
             except Exception as e:
-                out.append(dict(operator='rev',external_id=url.rstrip('/').split('/')[-1],title=url,url=url,error=str(e),scope='research'))
+                log.info("[Rev] parse error %s :: %s",url,e)
     except Exception as e:
-        out.append(dict(operator='rev',external_id='discovery',title='Rev discovery adapter',url=bases[0],error=str(e),scope='research'))
+        log.exception("[Rev] discovery failure: %s",e)
     return out
 
 COLLECTORS=[kilted,dreamcar,bounty,rev]
