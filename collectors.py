@@ -260,10 +260,25 @@ def dreamcar():
                     continue
                 stats['soldmax']+=1
 
-                closes=None  # fail closed: listing timer is not the competition close
-                # diagnostic-only individual page near-term label if card nesting changed
+                # Use the individual competition page only. Dream exposes a
+                # competition-specific "Automated Draw Today/Tomorrow, HH:MM" beside
+                # its countdown. Never use the cash-category/listing card timer.
+                closes=None
+                cm=re.search(r'Competition closes in.*?Automated Draw\s+(Today|Tomorrow)\s*,?\s*(\d{1,2}:\d{2})',text,re.I)
+                if cm:
+                    now=datetime.now(UK)
+                    day=now.date()+timedelta(days=1 if cm.group(1).lower()=='tomorrow' else 0)
+                    hh,mm=map(int,cm.group(2).split(':'))
+                    closes=datetime(day.year,day.month,day.day,hh,mm,tzinfo=UK)
                 if closes is None:
-                    closes=None
+                    # Some Dream pages expose an absolute competition-specific draw date.
+                    dm=re.search(r'(?:draw date for this competition is|Draw Date)\s*:?\s*([^.|]+)',text,re.I)
+                    if dm:
+                        try:
+                            closes=dtparse.parse(dm.group(1),dayfirst=True,fuzzy=True)
+                            if closes.tzinfo is None: closes=closes.replace(tzinfo=UK)
+                        except Exception:
+                            closes=None
                 if closes is None:
                     if len(rejects)<8: rejects.append(f"NO_CLOSE {title[:70]}")
                     continue
