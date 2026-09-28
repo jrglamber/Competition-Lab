@@ -1,4 +1,4 @@
-import os,re,requests
+import os,re,requests,logging
 from bs4 import BeautifulSoup
 from dateutil import parser as dtparse
 from urllib.parse import urljoin
@@ -183,7 +183,7 @@ def _dream_cash_value(title):
 def _dream_listing_close(card_text, now=None):
     """Near-term Dream closing time from the dedicated Cash listing."""
     now=(now or datetime.now(UK)).astimezone(UK)
-    m=re.search(r'Closes\s+(Today|Tomorrow)\s+(\d{1,2}:\d{2})',card_text or '',re.I)
+    m=re.search(r'(?:Closes|Automated Draw)\s+(Today|Tomorrow)\s*,?\s*(\d{1,2}:\d{2})',card_text or '',re.I)
     if not m: return None
     day=now.date()+timedelta(days=1 if m.group(1).lower()=='tomorrow' else 0)
     hh,mm=map(int,m.group(2).split(':'))
@@ -209,7 +209,7 @@ def dreamcar():
             for _ in range(10):
                 if node is None: break
                 txt=' '.join(node.stripped_strings)
-                if re.search(r'(?:Closes\s+)?(?:Today|Tomorrow)[,\s]+\d{1,2}:\d{2}',txt,re.I):
+                if re.search(r'(?:Closes|Automated Draw)\s+(?:Today|Tomorrow)\s*,?\s*\d{1,2}:\d{2}',txt,re.I):
                     card=txt; break
                 node=node.parent
             if card:
@@ -249,7 +249,7 @@ def dreamcar():
                     continue
                 stats['price']+=1
 
-                sr=(re.search(r'([\d,]+)\s*/\s*([\d,]+)\s*(?:Tickets?\s+sold)?',text,re.I)
+                sr=(re.search(r'([\d,]+)\s*/\s*([\d,]+)\s*Tickets?\s+sold',text,re.I)
                     or re.search(r'currently\s+has\s+([\d,]+)\s+entries.*?maximum\s+number\s+of\s+([\d,]+)\s+entries',text,re.I))
                 if not sr:
                     if len(rejects)<8: rejects.append(f"NO_SOLDMAX {title[:70]}")
