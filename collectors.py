@@ -260,10 +260,10 @@ def dreamcar():
                     continue
                 stats['soldmax']+=1
 
-                closes=_dream_listing_close(card)
+                closes=None  # fail closed: listing timer is not the competition close
                 # diagnostic-only individual page near-term label if card nesting changed
                 if closes is None:
-                    closes=_dream_listing_close(text)
+                    closes=None
                 if closes is None:
                     if len(rejects)<8: rejects.append(f"NO_CLOSE {title[:70]}")
                     continue
