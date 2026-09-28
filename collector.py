@@ -89,7 +89,7 @@ def run_cycle():
     log.info('Cycle complete in %.1fs | operators=%d rows=%d research_valid=%d entry_valid=%d unhealthy=%d snapshots=%d qualifying=%d errors=%d',elapsed,totals['operators'],totals['rows'],totals['research_valid'],totals['entry_valid'],totals['unhealthy'],totals['snapshots'],totals['qualifying'],totals['errors'])
 
 def main():
-    log.info('Competition Lab Collector v0.3.3 starting | interval=%ss | threshold=+%.0f%%',INTERVAL,TH*100)
+    log.info('Competition Lab Collector v0.3.4 starting | interval=%ss | threshold=+%.0f%%',INTERVAL,TH*100)
     while True:
       try: run_cycle()
       except Exception as e: log.exception('Collector cycle failed: %s',e)
