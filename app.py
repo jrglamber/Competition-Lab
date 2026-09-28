@@ -53,7 +53,7 @@ def home():
    EXTRACT(EPOCH FROM (c.closes_at-now()))/3600 close_hours,
    (SELECT count(*) FROM entries e WHERE e.competition_id=c.id) entry_count
    FROM competitions c LEFT JOIN LATERAL (SELECT * FROM snapshots WHERE competition_id=c.id ORDER BY observed_at DESC LIMIT 1)s ON true
-   WHERE c.status='open' AND c.closes_at IS NOT NULL AND c.closes_at >= now()
+   WHERE c.status='open' AND c.closes_at IS NOT NULL AND c.closes_at >= now()\n     AND c.last_seen_at >= now() - interval '45 minutes'\n     AND c.health IN ('research_valid','entry_valid')
      AND (c.closes_at AT TIME ZONE 'Europe/London')::date = ((now() AT TIME ZONE 'Europe/London')::date + %s)
    ORDER BY c.closes_at ASC, s.conservative_ev DESC NULLS LAST'''
   th=float(os.getenv('MIN_CONSERVATIVE_EV','.40'))
@@ -95,7 +95,7 @@ def enter(cid):
       or x['close_hours'] is None or float(x['close_hours'])<0 or float(x['close_hours'])>entry_window
       or x['conservative_ev'] is None or float(x['conservative_ev'])<th):
    return ('Entry blocked: opportunity is not ENTRY READY.',409)
-  stake=float(x['ticket_price_gbp'])*tickets; expected=float(x['prize_value_gbp'])*tickets/(x['sold_count']+tickets); ep=expected-stake
+  stake=float(x['ticket_price_gbp'])*tickets; final_field=max(int(x['conservative_final_field']),int(x['sold_count'])+tickets); expected=float(x['prize_value_gbp'])*tickets/final_field; ep=expected-stake
   c.execute('''INSERT INTO entries(competition_id,tickets,stake_gbp,sold_count_at_entry,nominal_ev_at_entry,conservative_ev_at_entry,conservative_final_field_at_entry,expected_prize_gbp,expected_profit_gbp,notes) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',(cid,tickets,stake,x['sold_count'],x['nominal_ev'],x['conservative_ev'],x['conservative_final_field'],expected,ep,notes));c.commit()
  return redirect(url_for('home'))
 @app.get('/entries')
