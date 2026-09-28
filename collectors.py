@@ -22,9 +22,13 @@ def _title(soup,url):
 
 def _scope(title,text):
     low=(title+' '+text[:2500]).lower()
-    # v1 live universe: simple end-draw cash or explicit cash alternative only.
-    research=['instant win','instant wins','every ticket wins','site credit','golden ticket','worth of tickets','ticket bundle','tickets into','spin to win']
-    return 'research' if any(x in low for x in research) else 'eligible'
+    research=['instant win','instant wins','every ticket wins','site credit','golden ticket',
+              'worth of tickets','ticket bundle','tickets into','spin to win','cash alternative',
+              ' or £',' plus £',' + £']
+    if any(x in low for x in research):
+        return 'research'
+    # Live universe is now deliberately narrow: the named end prize itself must be cash.
+    return 'eligible' if re.search(r'win\s*£\s*[\d,]+(?:\.\d+)?\s*(?:tax[- ]?free\s*)?cash\b',title or '',re.I) else 'research'
 
 def _cash_value(title,text):
     # Explicit cash alternative is strongest evidence.
@@ -61,8 +65,8 @@ def kilted():
             closes=dtparse.parse(cm.group(1).replace('@',' '),dayfirst=True) if cm else None
             if closes is not None and closes.tzinfo is None: closes=closes.replace(tzinfo=UK)
             guaranteed=('if all tickets do not sell out' in text.lower() and 'regardless' in text.lower()) or ('guaranteed draw' in text.lower() and 'no extension' in text.lower())
-            prize=_cash_value(title,text)
             scope=_scope(title,text)
+            prize=_cash_value(title,'') if scope=='eligible' else None
             out.append(dict(operator='kilted',external_id=url.rstrip('/').split('/')[-1],title=title[:300],url=url,
                 prize=prize,price=float(pm.group(1).replace(',','')) if pm else None,sold=sold,max_tickets=max_t,
                 closes=closes,guaranteed=guaranteed,scope=scope))
@@ -230,9 +234,9 @@ def dreamcar():
                 stats['fetched']+=1
                 title=_title(ps,url)
                 text=' '.join(ps.stripped_strings)
-                low=(title+' '+text).lower()
+                title_low=title.lower()
 
-                if any(x in low for x in ('instant win','every ticket wins','site credit','dream points')):
+                if any(x in title_low for x in ('instant win','every ticket wins','site credit','dream points')):
                     if len(rejects)<8: rejects.append(f"EXCLUDED_STRUCTURE {title[:70]}")
                     continue
 
