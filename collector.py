@@ -27,12 +27,26 @@ def run_cycle():
         for x in rows:
           totals['rows']+=1; err=x.get('error'); scope=x.get('scope','research')
           research_required=['price','sold','max_tickets','closes']
-          research_valid=(not err and all(x.get(k) is not None for k in research_required))
+          fields_present=(not err and all(x.get(k) is not None for k in research_required))
+          sane=False
+          sanity_reason=None
+          if fields_present:
+            try:
+              price=float(x['price']); sold=int(x['sold']); max_tickets=int(x['max_tickets'])
+              if price <= 0: sanity_reason='ticket price must be > 0'
+              elif sold < 0: sanity_reason='sold count must be >= 0'
+              elif max_tickets <= 0: sanity_reason='max tickets must be > 0'
+              elif sold > max_tickets: sanity_reason='sold count exceeds max tickets'
+              elif x.get('prize') is not None and float(x['prize']) <= 0: sanity_reason='prize must be > 0'
+              else: sane=True
+            except (TypeError,ValueError): sanity_reason='non-numeric price/sold/max/prize'
+          research_valid=(fields_present and sane)
           entry_valid=(research_valid and scope=='eligible' and x.get('prize') is not None and bool(x.get('guaranteed')))
           health='entry_valid' if entry_valid else ('research_valid' if research_valid else 'unhealthy')
           totals[health]+=1
           reason=err
-          if not reason and not research_valid: reason='missing price/sold/max/close data'
+          if not reason and not fields_present: reason='missing price/sold/max/close data'
+          elif not reason and not sane: reason='invalid competition data: '+str(sanity_reason)
           elif not reason and not entry_valid: reason='research-only format or prize/guarantee not verified'
           vals=(x['operator'],x['external_id'],x['title'],x['url'],x.get('prize'),x.get('price'),x.get('max_tickets'),x.get('closes'),x.get('guaranteed'),scope,health,reason,started)
           r=c.execute('''INSERT INTO competitions(operator,external_id,title,url,prize_value_gbp,ticket_price_gbp,max_tickets,closes_at,guaranteed,scope,health,health_reason,last_seen_at)
@@ -75,7 +89,7 @@ def run_cycle():
     log.info('Cycle complete in %.1fs | operators=%d rows=%d research_valid=%d entry_valid=%d unhealthy=%d snapshots=%d qualifying=%d errors=%d',elapsed,totals['operators'],totals['rows'],totals['research_valid'],totals['entry_valid'],totals['unhealthy'],totals['snapshots'],totals['qualifying'],totals['errors'])
 
 def main():
-    log.info('Competition Lab Collector v0.3.2 starting | interval=%ss | threshold=+%.0f%%',INTERVAL,TH*100)
+    log.info('Competition Lab Collector v0.3.3 starting | interval=%ss | threshold=+%.0f%%',INTERVAL,TH*100)
     while True:
       try: run_cycle()
       except Exception as e: log.exception('Collector cycle failed: %s',e)
